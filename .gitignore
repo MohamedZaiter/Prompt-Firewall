@@ -128,34 +128,63 @@ dmypy.json
 *.swp
 *.swo
 *~
-.DS_Store
 
-# Project specific
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Project specific - Data
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
 data/cache/
-data/raw/
-data/processed/
+data/embeddings/*
+!data/embeddings/.gitkeep
+
+# Project specific - Models (large files)
 models/ml_models/*.pkl
-models/transformers/**/
-logs/
+models/transformers/**/pytorch_model.bin
+models/transformers/**/model.safetensors
+models/transformers/**/*.bin
+models/rules/*
+!models/rules/.gitkeep
+
+# Logs
+logs/*
+!logs/.gitkeep
 *.log
+
+# Training outputs
+output/
+evaluation_results/*.png
+evaluation_results/*.csv
+!evaluation_results/.gitkeep
 
 # Temporary files
 *.tmp
 *.temp
 temp/
+.temp/
 
-# OS files
-Thumbs.db
-.DS_Store
+# Large model files
+*.h5
+*.hdf5
+*.pt
+*.pth
+*.onnx
+*.pb
 
-# Notebooks
-.ipynb_checkpoints/
-*.ipynb_checkpoints
-
-# API logs
-logs/firewall.log
-
-# Large files
+# Archive files
 *.zip
 *.tar.gz
 *.rar
+*.7z
+
+# Personal notes (not to be committed)
+TODO.md
+NOTES.md
+scratch.py
+test_*.py
+!tests/test_*.py

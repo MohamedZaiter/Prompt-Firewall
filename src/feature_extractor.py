@@ -1,35 +1,97 @@
 """
 Extraction de features pour le pare-feu LLM
+Based on notebook 1: Multilingual BERT embeddings for best ML classifier performance
 """
 
 import numpy as np
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 from sentence_transformers import SentenceTransformer
 from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
 import joblib
 import warnings
+import torch
 
 
 class FeatureExtractor:
-    """Classe pour extraire des features des textes"""
+    """Classe pour extraire des features des textes
     
-    def __init__(self, embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"):
+    Based on notebook experiments:
+    - Notebook 1 uses multilingual BERT embeddings for ML classifiers (97.4% F1 with Logistic Regression)
+    - Sentence transformers for lighter embedding alternative
+    """
+    
+    def __init__(
+        self, 
+        embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+        use_bert_embeddings: bool = False,
+        bert_model: str = "bert-base-multilingual-uncased"
+    ):
         """
         Initialiser l'extracteur de features
         
         Args:
-            embedding_model: Modèle d'embeddings à utiliser
+            embedding_model: Modèle d'embeddings sentence-transformers à utiliser
+            use_bert_embeddings: Use BERT embeddings instead of sentence transformers
+            bert_model: BERT model name (if use_bert_embeddings=True)
         """
-        try:
-            self.embedding_model = SentenceTransformer(embedding_model)
-            self.use_embeddings = True
-        except Exception as e:
-            print(f"Attention: Impossible de charger le modèle d'embeddings: {e}")
-            self.embedding_model = None
-            self.use_embeddings = False
+        self.use_bert_embeddings = use_bert_embeddings
+        
+        if use_bert_embeddings:
+            # Use BERT as in notebook 1 for best ML performance
+            try:
+                from transformers import BertTokenizer, BertModel
+                self.bert_tokenizer = BertTokenizer.from_pretrained(bert_model)
+                self.bert_model = BertModel.from_pretrained(bert_model)
+                self.bert_model.eval()  # Set to evaluation mode
+                self.use_embeddings = True
+                self.embedding_model = None
+                print(f"✓ Loaded BERT model: {bert_model}")
+            except Exception as e:
+                print(f"⚠ Failed to load BERT model: {e}")
+                self.use_embeddings = False
+                self.bert_tokenizer = None
+                self.bert_model = None
+        else:
+            # Use sentence transformers (lighter alternative)
+            try:
+                self.embedding_model = SentenceTransformer(embedding_model)
+                self.use_embeddings = True
+                self.bert_tokenizer = None
+                self.bert_model = None
+                print(f"✓ Loaded embedding model: {embedding_model}")
+            except Exception as e:
+                print(f"⚠ Failed to load embedding model: {e}")
+                self.embedding_model = None
+                self.use_embeddings = False
         
         self.tfidf_vectorizer = TfidfVectorizer(max_features=1000, ngram_range=(1, 2))
         self.count_vectorizer = CountVectorizer(max_features=500, ngram_range=(1, 2))
+    
+    def get_bert_embedding(self, prompt: str) -> np.ndarray:
+        """
+        Extract BERT embedding for a single prompt (as in notebook 1)
+        
+        Args:
+            prompt: Text to embed
+            
+        Returns:
+            BERT embedding vector (768-dimensional for base model)
+        """
+        if self.bert_tokenizer is None or self.bert_model is None:
+            raise ValueError("BERT model not loaded. Set use_bert_embeddings=True during initialization.")
+        
+        # Tokenize
+        tokens = self.bert_tokenizer(prompt, return_tensors='pt', truncation=True, padding=True)
+        
+        # Get embeddings
+        with torch.no_grad():
+            outputs = self.bert_model(**tokens)
+        
+        # Use mean of last hidden states as sentence embedding
+        last_hidden_states = outputs.last_hidden_state
+        embedding_vector = last_hidden_states.mean(dim=1).squeeze().numpy()
+        
+        return embedding_vector
     
     def extract_embeddings(self, texts: List[str]) -> np.ndarray:
         """
@@ -44,7 +106,16 @@ class FeatureExtractor:
         if not self.use_embeddings:
             return None
         
-        return self.embedding_model.encode(texts, convert_to_numpy=True)
+        if self.use_bert_embeddings:
+            # Use BERT embeddings (as in notebook 1)
+            embeddings = []
+            for text in texts:
+                embedding = self.get_bert_embedding(text)
+                embeddings.append(embedding)
+            return np.array(embeddings)
+        else:
+            # Use sentence transformers
+            return self.embedding_model.encode(texts, convert_to_numpy=True)
     
     def extract_tfidf_features(self, texts: List[str]) -> np.ndarray:
         """
