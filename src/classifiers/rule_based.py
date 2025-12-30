@@ -110,6 +110,8 @@ class RuleBasedClassifier:
         
         return is_anomaly, score
     
+        return is_blocked, score, found_keywords
+    
     def check_encoding_obfuscation(self, text: str) -> Tuple[bool, float]:
         """
         Vérifier la présence d'encodages ou d'obfuscation
@@ -121,16 +123,22 @@ class RuleBasedClassifier:
             Tuple (est_obfusqué, score)
         """
         obfuscation_patterns = [
-            r'base64:',
-            r'\\x[0-9a-fA-F]{2}',
-            r'%[0-9a-fA-F]{2}',
-            r'\\u[0-9a-fA-F]{4}',
+            r'base64:[A-Za-z0-9+/=]+',
+            r'(?:\\x[0-9a-fA-F]{2}){3,}',   # Hex sequence
+            r'(?:%[0-9a-fA-F]{2}){3,}',    # URL encoding sequence
+            r'(?:\\u[0-9a-fA-F]{4}){3,}',  # Unicode sequence
+            r'([A-Za-z0-9])\1{5,}',        # Character repetition
         ]
         
         matches = 0
         for pattern in obfuscation_patterns:
             if re.search(pattern, text):
                 matches += 1
+        
+        # Check for high ratio of non-printable or special chars
+        special_char_ratio = len(re.findall(r'[^a-zA-Z0-9\s]', text)) / max(len(text), 1)
+        if special_char_ratio > 0.4 and len(text) > 20:
+             matches += 2
         
         is_obfuscated = matches > 0
         score = min(matches / len(obfuscation_patterns), 1.0)

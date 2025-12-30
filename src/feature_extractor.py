@@ -45,9 +45,9 @@ class FeatureExtractor:
                 self.bert_model.eval()  # Set to evaluation mode
                 self.use_embeddings = True
                 self.embedding_model = None
-                print(f"✓ Loaded BERT model: {bert_model}")
+                print(f"[OK] Loaded BERT model: {bert_model}")
             except Exception as e:
-                print(f"⚠ Failed to load BERT model: {e}")
+                print(f"[WARNING] Failed to load BERT model: {e}")
                 self.use_embeddings = False
                 self.bert_tokenizer = None
                 self.bert_model = None
@@ -58,9 +58,9 @@ class FeatureExtractor:
                 self.use_embeddings = True
                 self.bert_tokenizer = None
                 self.bert_model = None
-                print(f"✓ Loaded embedding model: {embedding_model}")
+                print(f"[OK] Loaded embedding model: {embedding_model}")
             except Exception as e:
-                print(f"⚠ Failed to load embedding model: {e}")
+                print(f"[WARNING] Failed to load embedding model: {e}")
                 self.embedding_model = None
                 self.use_embeddings = False
         

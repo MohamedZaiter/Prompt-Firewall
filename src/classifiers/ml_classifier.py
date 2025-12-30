@@ -12,6 +12,7 @@ import numpy as np
 from typing import Dict, Literal
 import joblib
 import logging
+from sklearn.calibration import CalibratedClassifierCV
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -84,7 +85,13 @@ class MLClassifier:
         }
         
         ModelClass = self.SUPPORTED_MODELS[self.model_type]
-        return ModelClass(**params[self.model_type])
+        model = ModelClass(**params[self.model_type])
+        
+        # Wrap Naive Bayes in CalibratedClassifierCV to get probabilities instead of 0/1
+        if self.model_type == "naive_bayes":
+            return CalibratedClassifierCV(model, method='sigmoid', cv=3)
+            
+        return model
     
     def train(self, X_train: np.ndarray, y_train: np.ndarray) -> None:
         """
@@ -141,8 +148,18 @@ class MLClassifier:
         if hasattr(self.model, "predict_proba"):
             return self.model.predict_proba(X)
         
+        # Fallback for models without predict_proba (e.g. LinearSVC)
         scores = self.model.decision_function(X)
-        return np.column_stack([1 - scores, scores])
+        
+        # Apply sigmoid to convert raw scores to probabilities [0, 1]
+        proba = 1 / (1 + np.exp(-scores))
+        
+        # Determine if binary or multi-class
+        if proba.ndim == 1:
+            proba = np.column_stack([1 - proba, proba])
+            
+        # Ensure values are strictly within [0, 1]
+        return np.clip(proba, 0.0, 1.0)
     
     def evaluate(self, X_test: np.ndarray, y_test: np.ndarray) -> Dict[str, float]:
         """

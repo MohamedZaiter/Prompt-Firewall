@@ -188,3 +188,7 @@ NOTES.md
 scratch.py
 test_*.py
 !tests/test_*.py
+
+models/xlm-roberta-large-zero-shot.pkl
+
+models/xlm_roberta/model.safetensors

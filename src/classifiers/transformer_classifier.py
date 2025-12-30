@@ -6,14 +6,6 @@ Based on notebooks 2 & 3: Pre-trained and Fine-tuned LLM classification
 import torch
 import numpy as np
 from typing import Dict, Tuple, List, Optional
-from transformers import (
-    AutoTokenizer, 
-    AutoModelForSequenceClassification,
-    XLMRobertaTokenizer,
-    XLMRobertaForSequenceClassification,
-    Trainer,
-    TrainingArguments
-)
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 import warnings
 import pandas as pd
@@ -26,10 +18,12 @@ class CustomDataset(torch.utils.data.Dataset):
         self.encodings = encodings
         self.labels = labels
 
+
     def __getitem__(self, idx):
         item = {key: torch.tensor(val[idx]) for key, val in self.encodings.items()}
         item['labels'] = torch.tensor(self.labels[idx])
         return item
+
 
     def __len__(self):
         return len(self.labels)
@@ -62,6 +56,9 @@ class TransformerClassifier:
         self.trainer = None
         self.results_df = pd.DataFrame(columns=["epoch", "accuracy", "precision", "recall", "f1"])
         
+        # Lazy import to avoid circular dependencies
+        from transformers import AutoTokenizer, XLMRobertaTokenizer, AutoModelForSequenceClassification
+        
         if not use_finetuned:
             self._load_model()
             print("⚠ Warning: Using pre-trained model without fine-tuning. "
@@ -69,10 +66,14 @@ class TransformerClassifier:
     
     def _load_model(self):
         """Charger le modèle pré-entraîné"""
+        from transformers import AutoTokenizer, AutoModelForSequenceClassification, XLMRobertaTokenizer, XLMRobertaForSequenceClassification
+        
         try:
             print(f"Chargement du modèle {self.model_name}...")
             
             # Use XLM-RoBERTa specific classes for better performance
+            from transformers import XLMRobertaTokenizer, XLMRobertaForSequenceClassification, AutoTokenizer, AutoModelForSequenceClassification
+            
             if "xlm-roberta" in self.model_name.lower():
                 self.tokenizer = XLMRobertaTokenizer.from_pretrained(self.model_name)
                 self.model = XLMRobertaForSequenceClassification.from_pretrained(
@@ -156,6 +157,8 @@ class TransformerClassifier:
         Returns:
             DataFrame with training metrics per epoch
         """
+        from transformers import Trainer, TrainingArguments
+        
         if self.model is None:
             self._load_model()
         

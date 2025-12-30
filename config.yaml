@@ -27,9 +27,29 @@ detection:
   use_ensemble: true
   use_rules: true
   
+  enable_dynamic_threshold: true
+  base_threshold: 0.75
+  strict_threshold: 0.95
+  attack_window_seconds: 60
+  attack_trigger_count: 5
+  
 rules:
   max_prompt_length: 2000
   blocked_keywords:
+    - "ignore previous instructions"
+    - "ignore your instructions"
+    - "disregard all"
+    - "system prompt"
+    - "your instructions are"
+    - "dev mode"
+    - "developer mode"
+    - "jailbreak"
+    - "god mode"
+    - "do anything now"
+    - "always answer"
+    - "DAN"
+    - "maximum"
+    - "unrestricted"
     - "ignore previous instructions"
     - "disregard all"
     - "system prompt"

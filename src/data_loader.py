@@ -6,7 +6,7 @@ Wrapper around DataManager for backward compatibility and additional utilities
 import pandas as pd
 from pathlib import Path
 from typing import Tuple, Optional
-from .data_manager import DataManager
+from data_manager import DataManager
 
 
 class DataLoader:

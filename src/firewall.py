@@ -9,11 +9,63 @@ import yaml
 from typing import Dict, List, Tuple, Optional
 import numpy as np
 from pathlib import Path
-from .classifiers.rule_based import RuleBasedClassifier
-from .classifiers.ml_classifier import MLClassifier
-from .classifiers.transformer_classifier import TransformerClassifier
-from .preprocessor import Preprocessor
-from .feature_extractor import FeatureExtractor
+import time
+from collections import deque
+from classifiers.rule_based import RuleBasedClassifier
+from classifiers.ml_classifier import MLClassifier
+from classifiers.transformer_classifier import TransformerClassifier
+
+class PipelineWrapper:
+    """Wrapper to make Hugging Face pipelines compatible with TransformerClassifier interface"""
+    def __init__(self, pipeline):
+        self.pipeline = pipeline
+        self.is_trained = True
+        
+    def predict(self, text):
+        try:
+            # Handle Zero-Shot Classification Pipeline
+            if hasattr(self.pipeline, 'task') and self.pipeline.task == "zero-shot-classification":
+                candidate_labels = ["malicious", "benign"]
+                result = self.pipeline(text, candidate_labels)
+                mal_idx = -1
+                for i, label in enumerate(result['labels']):
+                    if label == "malicious":
+                        mal_idx = i
+                        break
+                
+                if mal_idx != -1:
+                    score = result['scores'][mal_idx]
+                    benign_score = result['scores'][1-mal_idx]
+                    if score > benign_score:
+                        return 1, score
+                    else:
+                        return 0, benign_score
+                return 0, 0.5 
+            # Handle Text Classification Pipeline
+            else:
+                result = self.pipeline(text)
+                if isinstance(result, list):
+                    label = result[0]['label']
+                    score = result[0]['score']
+                    if label in ['LABEL_1', '1', 'malicious', 'INJECTION']:
+                        return 1, float(score)
+                    else:
+                        return 0, float(score)
+                return 0, 0.5
+        except Exception as e:
+            print(f"Pipeline prediction error: {e}")
+            return 0, 0.0
+
+    def predict_batch(self, texts):
+        preds = []
+        confs = []
+        for text in texts:
+            p, c = self.predict(text)
+            preds.append(p)
+            confs.append(c)
+        return np.array(preds), np.array(confs)
+from preprocessor import Preprocessor
+from feature_extractor import FeatureExtractor
 
 
 class LLMFirewall:
@@ -57,9 +109,23 @@ class LLMFirewall:
             self._init_transformer_classifier()
         
         # Configuration
-        self.threshold_confidence = self.detection_config.get('threshold_confidence', 0.75)
+        # Configuration
+        self._load_detection_config()
+        
+        # State for dynamic thresholding
+        self.attack_history = deque(maxlen=100)
+        self.current_threshold = self.base_threshold
+        self.prompt_cache = {}  # Simple cache for prompt results
+        
+    def _load_detection_config(self):
+        """Load detection params from config"""
+        self.base_threshold = self.detection_config.get('base_threshold', 0.75)
+        self.strict_threshold = self.detection_config.get('strict_threshold', 0.95)
+        self.attack_window = self.detection_config.get('attack_window_seconds', 60)
+        self.attack_trigger_limit = self.detection_config.get('attack_trigger_count', 5)
         self.use_ensemble = self.detection_config.get('use_ensemble', True)
         self.use_rules = self.detection_config.get('use_rules', True)
+        self.enable_dynamic = self.detection_config.get('enable_dynamic_threshold', False)
     
     def _load_config(self, config_path: str) -> Dict:
         """Charger la configuration"""
@@ -74,7 +140,7 @@ class LLMFirewall:
         ml_models = self.config['models'].get('ml_models', [])
         
         # Try to load trained models from disk
-        models_dir = Path("models/ml_models")
+        models_dir = Path("models/notebook_models")
         feature_extractor_path = models_dir / "feature_extractor.pkl"
         
         # Load feature extractor if available
@@ -85,9 +151,9 @@ class LLMFirewall:
                 saved_data = joblib.load(str(feature_extractor_path))
                 self.feature_extractor.tfidf_vectorizer = saved_data.get('tfidf_vectorizer')
                 self.feature_extractor.count_vectorizer = saved_data.get('count_vectorizer')
-                print("✓ Loaded feature extractor vectorizers from disk")
+                print("[OK] Loaded feature extractor vectorizers from disk")
             except Exception as e:
-                print(f"⚠ Could not load feature extractor: {e}")
+                print(f"[WARNING] Could not load feature extractor: {e}")
         
         # Load or initialize ML models
         for model_type in ml_models:
@@ -98,29 +164,40 @@ class LLMFirewall:
                     classifier = MLClassifier(model_type)
                     classifier.load(str(model_path))
                     self.ml_classifiers[model_type] = classifier
-                    print(f"✓ Loaded trained {model_type} model from disk")
+                    print(f"[OK] Loaded trained {model_type} model from disk")
                 else:
                     # Create new untrained model
                     self.ml_classifiers[model_type] = MLClassifier(model_type)
-                    print(f"⚠ Created new untrained {model_type} model (no saved model found)")
+                    print(f"[WARNING] Created new untrained {model_type} model (no saved model found)")
             except Exception as e:
-                print(f"✗ Error initializing {model_type}: {e}")
+                print(f"[ERROR] Error initializing {model_type}: {e}")
     
     def _init_transformer_classifier(self):
-        """Initialize fine-tuned transformer classifier (from notebook 3)"""
+        """Initialize transformer classifier (fine-tuned or zero-shot)"""
         print("Initializing transformer classifier...")
         
         model_path = Path("models/transformers/xlm_roberta_finetuned")
         
         try:
             if model_path.exists():
-                # Load fine-tuned model
                 self.transformer_classifier = TransformerClassifier(use_finetuned=False)
                 self.transformer_classifier.load(str(model_path))
-                print("✓ Loaded fine-tuned XLM-RoBERTa model")
+                print("[OK] Loaded fine-tuned XLM-RoBERTa model")
+            elif (Path("models/xlm-roberta-large-zero-shot.pkl")).exists():
+                import joblib
+                loaded_obj = joblib.load("models/xlm-roberta-large-zero-shot.pkl")
+                
+                # Check compatibility and wrap if necessary
+                if hasattr(loaded_obj, 'predict') and hasattr(loaded_obj, 'predict_batch'):
+                    self.transformer_classifier = loaded_obj
+                    print("[OK] Loaded pickled TransformerClassifier")
+                else:
+                    print("[INFO] Detected raw pipeline. Wrapping in adapter...")
+                    self.transformer_classifier = PipelineWrapper(loaded_obj)
+                    print("[OK] Loaded wrapped Zero-Shot Pipeline")
             else:
-                print("⚠ Fine-tuned model not found, using pre-trained (lower performance expected)")
-                self.transformer_classifier = TransformerClassifier(
+                 print("[WARNING] Fine-tuned model not found, using pre-trained (lower performance expected)")
+                 self.transformer_classifier = TransformerClassifier(
                     model_name="xlm-roberta-large",
                     use_finetuned=False
                 )
@@ -150,73 +227,126 @@ class LLMFirewall:
         
         # Determine if transformer should be used
         use_transformer_model = use_transformer if use_transformer is not None else self.use_transformer
-        
+
+        # Lazy Load: If requested but not loaded, load it now
+        if use_transformer_model and self.transformer_classifier is None:
+             self._init_transformer_classifier()
+
         # 1. Vérification basée sur les règles (fast first-pass)
+        # Update dynamic threshold before check
+        if self.enable_dynamic:
+            self._update_dynamic_threshold()
+
+        # Optimization: Check cache first
+        prompt_hash = hash(prompt)
+        # if prompt_hash in self.prompt_cache:
+        #     cached_result = self.prompt_cache[prompt_hash]
+        #     # If the cached prompt was an attack, we must still record it as a new event for dynamic security
+        #     if cached_result['is_malicious']:
+        #         self._record_event(is_attack=True)
+        #     return cached_result
+
+        # 1. Rule-based detection (Fastest - Fail Fast)
         if self.use_rules:
             rule_result = self.rule_classifier.classify(prompt)
             result['detection_methods']['rules'] = rule_result
             if rule_result['is_malicious']:
                 result['is_malicious'] = True
-                result['confidence'] = max(result['confidence'], rule_result['total_score'])
+                result['confidence'] = 1.0 # Rules are deterministic
                 result['recommendation'] = 'Blocked by rule-based detection'
+                self._record_event(is_attack=True)
+                self.prompt_cache[prompt_hash] = result
+                return result # Cascade: Stop here
         
-        # 2. ML Classifiers with BERT embeddings (balanced accuracy/speed)
-        if use_ml and self.use_ensemble and not use_transformer_model:
+        # 2. ML Classifiers (Fast)
+        ml_confidence = 0.0
+        if use_ml and self.use_ensemble:
             ml_scores = []
             for model_name, classifier in self.ml_classifiers.items():
                 if classifier.is_trained:
                     try:
-                        # Extract BERT embeddings
                         embeddings = self.feature_extractor.extract_embeddings([prompt])
-                        prediction = classifier.predict(embeddings)[0]
                         proba = classifier.predict_proba(embeddings)[0][1]
-                        
-                        result['detection_methods'][f'ml_{model_name}'] = {
-                            'prediction': int(prediction),
-                            'confidence': float(proba)
-                        }
-                        
-                        if prediction == 1:
-                            ml_scores.append(proba)
-                    except Exception as e:
-                        print(f"Erreur avec le modèle {model_name}: {e}")
+                        result['detection_methods'][f'ml_{model_name}'] = {'confidence': float(proba)}
+                        ml_scores.append(proba)
+                    except Exception:
+                        pass
             
             if ml_scores:
-                ml_confidence = np.mean(ml_scores)
-                if ml_confidence > self.threshold_confidence:
-                    result['is_malicious'] = True
-                    result['confidence'] = max(result['confidence'], ml_confidence)
-                    result['recommendation'] = f'Blocked by ML ensemble (confidence: {ml_confidence:.2%})'
-        
-        # 3. Fine-tuned Transformer (highest accuracy, use as final arbiter)
-        if use_transformer_model and self.transformer_classifier is not None:
+                # Use MAX confidence instead of MEAN for better security
+                # If any model is very confident it's an attack, we should listen
+                ml_confidence = max(ml_scores)
+                result['confidence'] = ml_confidence # Always update confidence for final check
+                
+                # Cascade: If ML is very confident (either safe or malicious), stop here
+                # Unless we are in strict mode or using transformer explicitly
+                if not use_transformer_model:
+                     if ml_confidence > self.current_threshold:
+                        result['is_malicious'] = True
+                        result['confidence'] = ml_confidence
+                        result['recommendation'] = f'Blocked by ML ensemble (conf: {ml_confidence:.2%})'
+                        self._record_event(is_attack=True)
+                        self.prompt_cache[prompt_hash] = result
+                        return result
+                     elif ml_confidence < 0.2: # Very likely safe
+                        result['is_malicious'] = False
+                        result['confidence'] = ml_confidence
+                        result['recommendation'] = 'Approved by ML ensemble'
+                        self._record_event(is_attack=False)
+                        self.prompt_cache[prompt_hash] = result
+                        return result
+
+        # 3. Fine-tuned Transformer (Slowest - Final Arbiter)
+        # Invoked if ML was uncertain (0.2 < conf < threshold) OR explicitly requested
+        if use_transformer_model and self.transformer_classifier:
             try:
-                prediction, confidence = self.transformer_classifier.predict(prompt)
+                pred, confidence = self.transformer_classifier.predict(prompt)
+                result['detection_methods']['transformer'] = {'prediction': int(pred), 'confidence': float(confidence)}
                 
-                result['detection_methods']['transformer'] = {
-                    'prediction': int(prediction),
-                    'confidence': float(confidence)
-                }
-                
-                # Transformer has highest authority due to best performance in notebooks
-                if prediction == 1:
+                if pred == 1:
                     result['is_malicious'] = True
-                    result['confidence'] = max(result['confidence'], confidence)
-                    result['recommendation'] = f'Blocked by fine-tuned transformer (confidence: {confidence:.2%})'
+                    result['confidence'] = confidence
+                    result['recommendation'] = f'Blocked by Transformer (conf: {confidence:.2%})'
                 elif not result['is_malicious']:
-                    # If transformer says benign and no other method flagged it, likely safe
-                    result['recommendation'] = 'Approved by fine-tuned transformer'
+                    result['recommendation'] = 'Approved by Transformer'
             except Exception as e:
-                print(f"Erreur avec le transformer: {e}")
+                print(f"Transformer error: {e}")
+
+        # Final check against threshold for any remaining cases
+        if not result['is_malicious'] and result['confidence'] > self.current_threshold:
+             result['is_malicious'] = True
+             result['recommendation'] = f"Blocked by confidence threshold ({result['confidence']:.2%})"
+
+        self._record_event(is_attack=result['is_malicious'])
         
-        # Set default recommendation if none set
+        # Determine final recommendation string if empty
         if not result['recommendation']:
-            if result['is_malicious']:
-                result['recommendation'] = 'Blocked - potential prompt injection detected'
-            else:
-                result['recommendation'] = 'Approved - no threats detected'
-        
+             if result['is_malicious']: result['recommendation'] = "Blocked"
+             else: result['recommendation'] = "Approved"
+
+        self.prompt_cache[prompt_hash] = result
         return result
+
+    def _update_dynamic_threshold(self):
+        """Adjust threshold based on recent attack density"""
+        current_time = time.time()
+        # Remove old events
+        while self.attack_history and current_time - self.attack_history[0] > self.attack_window:
+            self.attack_history.popleft()
+            
+        if len(self.attack_history) >= self.attack_trigger_limit:
+            self.current_threshold = max(0.5, self.base_threshold - 0.1) # Lower threshold to be more sensitive
+            # Or strict mode: self.current_threshold = self.strict_threshold ?? 
+            # Usually under attack we want to be MORE sensitive -> LOWER threshold or HIGHER?
+            # If threshold is "minimum confidence to block", lower means we block MORE easily.
+            # Let's say we switch to strict mode = block more easily.
+            self.current_threshold = 0.6 # Be more paranoid
+        else:
+            self.current_threshold = self.base_threshold
+
+    def _record_event(self, is_attack: bool):
+        if is_attack:
+            self.attack_history.append(time.time())
     
     def filter_response(self, response: str) -> Dict:
         """
@@ -264,7 +394,7 @@ class LLMFirewall:
     def get_statistics(self) -> Dict:
         """Obtenir les statistiques du pare-feu"""
         return {
-            'threshold_confidence': self.threshold_confidence,
+            'threshold_confidence': self.current_threshold,
             'use_ensemble': self.use_ensemble,
             'use_rules': self.use_rules,
             'use_transformer': self.use_transformer,

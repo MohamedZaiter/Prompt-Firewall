@@ -1,10 +1,12 @@
-"""
-Main entry point for Prompt Firewall LLM classifier system
-"""
 
 import sys
 import logging
 from pathlib import Path
+import os
+
+# Set encoding to utf-8 for Windows console
+if sys.platform == 'win32':
+    sys.stdout.reconfigure(encoding='utf-8')
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent / "src"))
@@ -138,7 +140,7 @@ def test_firewall():
             # Show detection methods
             if result['detection_methods']:
                 for method, details in result['detection_methods'].items():
-                    if isinstance(details, dict) and details.get('is_malicious') or details.get('prediction'):
+                    if isinstance(details, dict) and (details.get('is_malicious') or details.get('prediction')):
                         logger.info(f"   └─ Detected by: {method}")
         
         logger.info("-" * 60)
