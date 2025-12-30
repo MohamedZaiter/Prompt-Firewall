@@ -1,0 +1,53 @@
+# Configuration du pare-feu LLM
+
+data:
+  dataset_name: "deepset/prompt-injections"
+  cache_dir: "./data/cache"
+  train_split: "train"
+  test_split: "test"
+
+models:
+  embedding_model: "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+  transformer_model: "xlm-roberta-base"
+  ml_models:
+    - "logistic_regression"
+    - "svm"
+    - "random_forest"
+    - "naive_bayes"
+
+training:
+  batch_size: 16
+  learning_rate: 2e-5
+  num_epochs: 5
+  warmup_steps: 500
+  max_length: 512
+
+detection:
+  threshold_confidence: 0.75
+  use_ensemble: true
+  use_rules: true
+  
+rules:
+  max_prompt_length: 2000
+  blocked_keywords:
+    - "ignore previous instructions"
+    - "disregard all"
+    - "system prompt"
+    - "your instructions are"
+    - "dev mode"
+    - "jailbreak"
+    - "god mode"
+    - "do anything now"
+  
+  sensitive_patterns:
+    - "password"
+    - "api key"
+    - "secret"
+    - "token"
+    - "credentials"
+    - "private key"
+
+response_filter:
+  check_leakage: true
+  check_toxicity: true
+  max_personal_info_score: 0.3
