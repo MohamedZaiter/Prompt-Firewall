@@ -300,7 +300,9 @@ class TransformerClassifier:
             text: Texte à analyser
             
         Returns:
-            Tuple (prediction, confidence)
+            Tuple (prediction, injection_probability)
+            - prediction: 0 (safe) or 1 (injection)
+            - injection_probability: probability of injection (always for class 1)
         """
         if self.model is None:
             raise ValueError("Le modèle n'est pas chargé")
@@ -313,9 +315,10 @@ class TransformerClassifier:
             logits = outputs.logits
             probs = torch.softmax(logits, dim=1)
             prediction = torch.argmax(logits, dim=1).item()
-            confidence = probs[0][prediction].item()
+            # FIXED: Always return probability for injection class (index 1)
+            injection_probability = probs[0][1].item()
         
-        return prediction, confidence
+        return prediction, injection_probability
     
     def predict_batch(self, texts: list) -> Tuple[np.ndarray, np.ndarray]:
         """
